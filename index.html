@@ -13,23 +13,24 @@
             <div class="wave-animation"></div>
         </div>
         
+        <div class="search-results" id="searchResults">
+            <!-- 搜索结果将在这里动态显示 -->
+        </div>
+        
         <div class="chat-container" id="chatContainer">
             <!-- 对话内容将在这里动态显示 -->
         </div>
         
         <div class="input-container">
-            <button id="startVoice" title="开始语音">
+            <button id="startVoice" title="按住说话">
                 <i class="ri-mic-line icon"></i>
             </button>
-            <button id="stopVoice" title="停止语音">
-                <i class="ri-mic-off-line icon"></i>
-            </button>
-            <textarea id="textInput" placeholder="输入文字或点击语音按钮开始语音输入..."></textarea>
+            <textarea id="textInput" placeholder="输入文字或按住语音按钮说话..."></textarea>
             <button id="sendBtn" title="发送">
                 <i class="ri-send-plane-fill icon"></i>
             </button>
         </div>
     </div>
-    <script src="script.js"></script>
+    <script type="module" src="script.js"></script>
 </body>
 </html> 

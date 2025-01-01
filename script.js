@@ -1,26 +1,147 @@
-document.addEventListener('DOMContentLoaded', function() {
+import SearchAPI from './search.js';
+
+document.addEventListener('DOMContentLoaded', async function() {
+    // 1. 首先声明所有变量
+    const searchAPI = new SearchAPI();
+    const searchResults = document.getElementById('searchResults');
     const chatContainer = document.getElementById('chatContainer');
     const textInput = document.getElementById('textInput');
     const sendBtn = document.getElementById('sendBtn');
     const startVoiceBtn = document.getElementById('startVoice');
-    const stopVoiceBtn = document.getElementById('stopVoice');
 
+    let mediaRecorder = null;
+    let audioChunks = [];
     let recognition = null;
-    if ('webkitSpeechRecognition' in window) {
-        recognition = new webkitSpeechRecognition();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = 'zh-CN';
-    }
+    let conversationHistory = [];
+    let nextSentenceTimer = null;
 
     const API_KEY = 'sk-hyeudoewxhrzksdcsfbyzkprbocvedmdhydzzmmpuohxxphs';
     const API_BASE_URL = 'https://api.siliconflow.cn/v1';
     const CHAT_API_URL = 'https://api.siliconflow.cn/chat/completions';
 
-    // 添加对话历史记录数组
-    let conversationHistory = [];
-    // 添加下一句请求的计时器
-    let nextSentenceTimer = null;
+    // 2. 声明所有函数
+    function stopVoiceRecognition() {
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+            mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            
+            // 重置按钮状态
+            startVoiceBtn.style.backgroundColor = '';  // 恢复默认颜色
+            startVoiceBtn.style.color = '';
+            document.querySelector('.circle-background').classList.remove('recording');
+        }
+    }
+
+    function startVoiceRecognition() {
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    channelCount: 1,
+                    sampleRate: { ideal: 16000 },
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
+            })
+            .then(stream => {
+                try {
+                    mediaRecorder = new MediaRecorder(stream, {
+                        mimeType: 'audio/webm;codecs=opus',
+                        audioBitsPerSecond: 16000
+                    });
+                    
+                    audioChunks = [];
+                    
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                        }
+                    };
+
+                    mediaRecorder.onerror = (event) => {
+                        console.error('录音错误:', event.error);
+                        stopVoiceRecognition();
+                    };
+
+                    mediaRecorder.onstart = () => {
+                        // 修改录音开始状态显示
+                        startVoiceBtn.style.backgroundColor = '#ff4d4f';  // 录音时按钮变红
+                        startVoiceBtn.style.color = 'white';
+                        document.querySelector('.circle-background').classList.add('recording');
+                    };
+
+                    mediaRecorder.onstop = async () => {
+                        try {
+                            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                            const wavBlob = await convertToWav(audioBlob);
+                            const transcribedText = await speechToText(wavBlob);
+                            textInput.value = transcribedText;
+                            
+                            // 自动发送识别的文本
+                            await sendMessage();
+                            
+                            // 清理录音状态
+                            startVoiceBtn.style.backgroundColor = '';  // 恢复默认颜色
+                            startVoiceBtn.style.color = '';
+                            document.querySelector('.circle-background').classList.remove('recording');
+                        } catch (error) {
+                            console.error('语音处理错误:', error);
+                            
+                            // 确保状态重置
+                            startVoiceBtn.style.backgroundColor = '';
+                            startVoiceBtn.style.color = '';
+                            document.querySelector('.circle-background').classList.remove('recording');
+                        }
+                    };
+                    
+                    mediaRecorder.start(100);
+                } catch (error) {
+                    console.error('初始化录音失败:', error);
+                    throw error;
+                }
+            })
+            .catch(error => {
+                console.error('获取麦克风失败:', error);
+                let errorMsg = '无法访问麦克风';
+                if (error.name === 'NotAllowedError') {
+                    errorMsg = '麦克风访问被拒绝，请确保已授予麦克风访问权限';
+                } else if (error.name === 'NotFoundError') {
+                    errorMsg = '未找到麦克风设备';
+                } else if (error.name === 'NotReadableError') {
+                    errorMsg = '麦克风设备正在被其他应用程序使用';
+                }
+                console.error(`${errorMsg}: ${error.name} - ${error.message}`);
+            });
+        } else {
+            console.error('您的浏览器不支持语音识别功能');
+        }
+    }
+
+    function initializeVoiceButton() {
+        // 移除原有的点击事件
+        startVoiceBtn.removeEventListener('click', startVoiceRecognition);
+        
+        // 创建事件处理函数
+        const handleMouseDown = (e) => {
+            e.preventDefault();
+            startVoiceRecognition();
+        };
+
+        const handleStop = () => {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                stopVoiceRecognition();
+            }
+        };
+
+        // 添加按下和松开事件
+        startVoiceBtn.addEventListener('mousedown', handleMouseDown);
+        startVoiceBtn.addEventListener('mouseup', handleStop);
+        startVoiceBtn.addEventListener('mouseleave', handleStop);
+        
+        // 添加触摸设备支持
+        startVoiceBtn.addEventListener('touchstart', handleMouseDown);
+        startVoiceBtn.addEventListener('touchend', handleStop);
+        startVoiceBtn.addEventListener('touchcancel', handleStop);
+    }
 
     // 添加消息到聊天界面
     function addMessage(text, isUser = false, isThinking = false) {
@@ -176,7 +297,6 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('response_format', 'json');
 
         try {
-            addMessage('正在识别语音...', false);
             const response = await fetch(`${API_BASE_URL}/audio/transcriptions`, {
                 method: 'POST',
                 headers: {
@@ -188,21 +308,20 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
                 const errorMessage = errorData.error?.message || `语音识别请求失败: ${response.status}`;
-                addMessage(`语音识别错误: ${errorMessage}`, false);
+                console.error(errorMessage);
                 throw new Error(errorMessage);
             }
 
             const data = await response.json();
             if (!data.text) {
                 const errorMessage = '未能识别到有效的语音内容';
-                addMessage(errorMessage, false);
+                console.error(errorMessage);
                 throw new Error(errorMessage);
             }
-            addMessage(`语音识别结果: ${data.text}`, false);
+            
             return data.text;
         } catch (error) {
             console.error('语音识别错误:', error);
-            addMessage(`语音识别失败: ${error.message}`, false);
             throw error;
         }
     }
@@ -215,92 +334,111 @@ document.addEventListener('DOMContentLoaded', function() {
             textInput.value = '';
             
             try {
+                // 显示思考状态
                 const thinkingMessage = addMessage('', false, true);
-                const aiResponse = await callSiliconFlowAPI(text);
+                
+                // 判断是否需要搜索
+                const shouldSearch = await checkIfNeedSearch(text);
+                
+                // 移除思考状态
                 chatContainer.removeChild(thinkingMessage);
                 
-                // 将AI响应按句子分割
-                const sentences = aiResponse.match(/[^。！？.!?]+[。！？.!?]+/g) || [aiResponse];
-                
-                // 逐句处理
-                for (const sentence of sentences) {
-                    try {
-                        // 创建新的消息元素
-                        const messageDiv = document.createElement('div');
-                        messageDiv.className = 'message ai-message';
-                        messageDiv.style.opacity = '0';
-                        messageDiv.textContent = sentence;
-                        chatContainer.appendChild(messageDiv);
+                if (shouldSearch) {
+                    // 显示搜索结果区域并执行搜索
+                    searchResults.style.display = 'block';
+                    const searchResultsData = await searchAPI.search(text);
+                    displaySearchResults(searchResultsData);
+                    
+                    // 添加提示消息
+                    addMessage('已为您找到相关新闻报道，请查看左侧搜索结果。', false);
+                } else {
+                    // 隐藏搜索结果区域
+                    searchResults.style.display = 'none';
+                    
+                    // 显示新的思考状态
+                    const aiThinkingMessage = addMessage('', false, true);
+                    
+                    // 继续处理AI对话
+                    const aiResponse = await callSiliconFlowAPI(text);
+                    chatContainer.removeChild(aiThinkingMessage);
+                    
+                    // 处理AI响应
+                    const sentences = aiResponse.match(/[^。！？.!?]+[。！？.!?]+/g) || [aiResponse];
+                    for (const sentence of sentences) {
+                        try {
+                            // 创建新的消息元素
+                            const messageDiv = document.createElement('div');
+                            messageDiv.className = 'message ai-message';
+                            messageDiv.style.opacity = '0';
+                            messageDiv.textContent = sentence;
+                            chatContainer.appendChild(messageDiv);
 
-                        // 尝试获取并播放语音
-                        let audioUrl = null;
-                        let retryCount = 0;
-                        const maxRetries = 3;
+                            // 尝试获取并播放语音
+                            let audioUrl = null;
+                            let retryCount = 0;
+                            const maxRetries = 3;
 
-                        while (retryCount < maxRetries && !audioUrl) {
-                            try {
-                                const encodedText = encodeURIComponent(sentence);
-                                const url = `https://xiaoapi.cn/API/zs_tts.php?type=xunfei&msg=${encodedText}&id=3`;
-                                
-                                const response = await fetch(url);
-                                
-                                if (![200, 206, 307].includes(response.status)) {
-                                    throw new Error(`TTS API状态码异常: ${response.status}`);
-                                }
+                            while (retryCount < maxRetries && !audioUrl) {
+                                try {
+                                    const encodedText = encodeURIComponent(sentence);
+                                    const url = `https://xiaoapi.cn/API/zs_tts.php?type=xunfei&msg=${encodedText}&id=3`;
+                                    
+                                    const response = await fetch(url);
+                                    
+                                    if (![200, 206, 307].includes(response.status)) {
+                                        throw new Error(`TTS API状态码异常: ${response.status}`);
+                                    }
 
-                                const data = await response.json();
-                                
-                                if (data.code !== 200) {
-                                    throw new Error(`语音合成失败: ${data.msg}`);
-                                }
+                                    const data = await response.json();
+                                    
+                                    if (data.code !== 200) {
+                                        throw new Error(`语音合成失败: ${data.msg}`);
+                                    }
 
-                                // 使用no-cors模式验证音频URL
-                                await fetch(data.tts, { mode: 'no-cors' });
-                                
-                                // 使用https链接
-                                audioUrl = data.tts.replace('http://', 'https://');
-                                break;
-                                
-                            } catch (error) {
-                                retryCount++;
-                                if (retryCount < maxRetries) {
-                                    console.error(`语音合成重试 ${retryCount}/${maxRetries}:`, error);
-                                    await new Promise(resolve => setTimeout(resolve, 1000));
-                                } else {
-                                    throw error;
+                                    // 使用no-cors模式验证音频URL
+                                    await fetch(data.tts, { mode: 'no-cors' });
+                                    
+                                    // 使用https链接
+                                    audioUrl = data.tts.replace('http://', 'https://');
+                                    break;
+                                    
+                                } catch (error) {
+                                    retryCount++;
+                                    if (retryCount < maxRetries) {
+                                        console.error(`语音合成重试 ${retryCount}/${maxRetries}:`, error);
+                                        await new Promise(resolve => setTimeout(resolve, 1000));
+                                    } else {
+                                        throw error;
+                                    }
                                 }
                             }
-                        }
 
-                        if (audioUrl) {
-                            // 显示文字
-                            messageDiv.style.transition = 'opacity 0.3s ease-in';
-                            messageDiv.style.opacity = '1';
-                            chatContainer.scrollTop = chatContainer.scrollHeight;
+                            if (audioUrl) {
+                                // 显示文字
+                                messageDiv.style.transition = 'opacity 0.3s ease-in';
+                                messageDiv.style.opacity = '1';
+                                chatContainer.scrollTop = chatContainer.scrollHeight;
 
-                            // 播放音频
-                            const audio = new Audio(audioUrl);
-                            await new Promise((resolve, reject) => {
-                                audio.onended = resolve;
-                                audio.onerror = reject;
-                                audio.play().catch(reject);
-                            });
-                        } else {
-                            throw new Error('无法获取有效的音频URL');
+                                // 播放音频
+                                const audio = new Audio(audioUrl);
+                                await new Promise((resolve, reject) => {
+                                    audio.onended = resolve;
+                                    audio.onerror = reject;
+                                    audio.play().catch(reject);
+                                });
+                            } else {
+                                throw new Error('无法获取有效的音频URL');
+                            }
+                            
+                        } catch (error) {
+                            console.error('句子处理错误:', error);
+                            addMessage(`处理失败: ${error.message}`, false);
                         }
-                        
-                    } catch (error) {
-                        console.error('句子处理错误:', error);
-                        addMessage(`处理失败: ${error.message}`, false);
                     }
                 }
-                
             } catch (error) {
                 console.error('Error:', error);
-                if (thinkingMessage && thinkingMessage.parentNode) {
-                    chatContainer.removeChild(thinkingMessage);
-                }
-                addMessage('抱歉，发生错误，请稍后重试。');
+                addMessage('抱歉，发生错误，请稍后重试。', false);
             }
         }
     }
@@ -331,114 +469,6 @@ document.addEventListener('DOMContentLoaded', function() {
             // 开始加载
             audio.load();
         });
-    }
-
-    // 修改录音相关代码
-    let mediaRecorder = null;
-    let audioChunks = [];
-
-    // 修改开始录音函数
-    function startVoiceRecognition() {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            navigator.mediaDevices.getUserMedia({ 
-                audio: {
-                    channelCount: 1,
-                    sampleRate: { ideal: 16000 },
-                    echoCancellation: true,
-                    noiseSuppression: true
-                }
-            })
-            .then(stream => {
-                try {
-                    mediaRecorder = new MediaRecorder(stream, {
-                        mimeType: 'audio/webm;codecs=opus',
-                        audioBitsPerSecond: 16000
-                    });
-                    
-                    audioChunks = [];
-                    
-                    mediaRecorder.ondataavailable = (event) => {
-                        if (event.data.size > 0) {
-                            audioChunks.push(event.data);
-                        }
-                    };
-
-                    mediaRecorder.onerror = (event) => {
-                        console.error('录音错误:', event.error);
-                        addMessage(`录音出错: ${event.error.name} - ${event.error.message}`, false);
-                        stopVoiceRecognition();
-                    };
-
-                    mediaRecorder.onstart = () => {
-                        addMessage('开始录音...', false);
-                        startVoiceBtn.disabled = true;
-                        stopVoiceBtn.disabled = false;
-                        document.querySelector('.circle-background').classList.add('recording');
-                    };
-
-                    mediaRecorder.onstop = async () => {
-                        addMessage('录音结束，正在处理...', false);
-                        try {
-                            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                            addMessage('正在转换音频格式...', false);
-                            const wavBlob = await convertToWav(audioBlob);
-                            const transcribedText = await speechToText(wavBlob);
-                            textInput.value = transcribedText;
-                            
-                            // 自动发送识别的文本
-                            await sendMessage();
-                            
-                            // 清理录音状态
-                            document.querySelector('.circle-background').classList.remove('recording');
-                            startVoiceBtn.disabled = false;
-                            stopVoiceBtn.disabled = true;
-                        } catch (error) {
-                            console.error('语音处理错误:', error);
-                            addMessage(`语音处理失败: ${error.message}`, false);
-                            
-                            // 确保状态重置
-                            document.querySelector('.circle-background').classList.remove('recording');
-                            startVoiceBtn.disabled = false;
-                            stopVoiceBtn.disabled = true;
-                        }
-                    };
-                    
-                    mediaRecorder.start(100);
-                } catch (error) {
-                    console.error('初始化录音失败:', error);
-                    addMessage(`初始化录音失败: ${error.name} - ${error.message}`, false);
-                    throw error;
-                }
-            })
-            .catch(error => {
-                console.error('获取麦克风失败:', error);
-                let errorMsg = '无法访问麦克风';
-                if (error.name === 'NotAllowedError') {
-                    errorMsg = '麦克风访问被拒绝，请确保已授予麦克风访问权限';
-                } else if (error.name === 'NotFoundError') {
-                    errorMsg = '未找到麦克风设备';
-                } else if (error.name === 'NotReadableError') {
-                    errorMsg = '麦克风设备正在被其他应用程序使用';
-                }
-                addMessage(`${errorMsg}: ${error.name} - ${error.message}`, false);
-                alert(errorMsg);
-            });
-        } else {
-            const errorMessage = '您的浏览器不支持语音识别功能';
-            addMessage(errorMessage, false);
-            alert(errorMessage);
-        }
-    }
-
-    // 停止录音
-    function stopVoiceRecognition() {
-        if (mediaRecorder && mediaRecorder.state === 'recording') {
-            mediaRecorder.stop();
-            mediaRecorder.stream.getTracks().forEach(track => track.stop());
-            startVoiceBtn.disabled = false;
-            stopVoiceBtn.disabled = true;
-            document.querySelector('.circle-background').classList.remove('recording');
-        }
     }
 
     // 修改音频格式转换函数的错误处理
@@ -539,38 +569,40 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // 事件监听
-    sendBtn.addEventListener('click', sendMessage);
-    
-    textInput.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
-    });
+    // 3. 初始化 Web Speech API
+    if ('webkitSpeechRecognition' in window) {
+        recognition = new webkitSpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'zh-CN';
+    }
 
-    startVoiceBtn.addEventListener('click', startVoiceRecognition);
-    stopVoiceBtn.addEventListener('click', stopVoiceRecognition);
-
+    // 4. 设置事件监听
     if (recognition) {
         recognition.onresult = async function(event) {
             const result = event.results[event.results.length - 1];
             if (result.isFinal) {
                 textInput.value = result[0].transcript;
-                // 自动发送识别的文本
                 await sendMessage();
             }
         };
 
         recognition.onerror = function(event) {
             console.error('语音识别错误:', event.error);
-            addMessage(`语音识别错误: ${event.error.message}`, false);
             stopVoiceRecognition();
         };
     }
 
-    // 初始化时禁用停止按钮
-    stopVoiceBtn.disabled = true;
+    // 5. 初始化按钮和事件监听
+    initializeVoiceButton();
+    
+    sendBtn.addEventListener('click', sendMessage);
+    textInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
 
     // 合并所有动画样式
     const animationStyles = document.createElement('style');
@@ -640,4 +672,57 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     addButtonEffects();
+
+    // 添加显示搜索结果的函数
+    function displaySearchResults(results) {
+        searchResults.innerHTML = results.map(result => `
+            <div class="search-result-item">
+                <div class="search-result-title">${result.title}</div>
+                <div class="search-result-content">${result.content}</div>
+                <a href="${result.link}" class="search-result-link" target="_blank">
+                    来源: ${result.media}
+                </a>
+            </div>
+        `).join('');
+    }
+
+    // 添加判断是否需要搜索的函数
+    async function checkIfNeedSearch(text) {
+        try {
+            const response = await fetch(CHAT_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: "Qwen/Qwen2.5-Coder-7B-Instruct",
+                    messages: [
+                        {
+                            role: "system",
+                            content: "你要根据用户的提问判断是否适合调用新闻检索模块，你只需要回答yes/no，不要有废话。如果问题涉及：1. 时事新闻 2. 数据统计 3. 实时信息 4. 最新进展 5. 市场行情 6. 体育赛事 7. 热点事件，就回答yes；如果是日常对话、技术咨询、个人建议等不需要实时信息的内容，就回答no。"
+                        },
+                        {
+                            role: "user",
+                            content: text
+                        }
+                    ],
+                    temperature: 0.1,
+                    max_tokens: 5
+                })
+            });
+
+            if (!response.ok) {
+                console.error('判断API请求失败');
+                return false;
+            }
+
+            const data = await response.json();
+            const result = data.choices[0].message.content.toLowerCase().trim();
+            return result === 'yes';
+        } catch (error) {
+            console.error('判断过程出错:', error);
+            return false;
+        }
+    }
 }); 
