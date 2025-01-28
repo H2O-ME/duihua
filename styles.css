@@ -35,6 +35,28 @@ body {
     box-shadow: 0 4px 15px rgba(24, 144, 255, 0.15);
     position: relative;
     overflow: hidden;
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 录音状态 */
+.circle-background.recording {
+    background: linear-gradient(180deg, #fff1f0 0%, #ff4d4f 100%);
+    transform: scale(1.1);
+    box-shadow: 0 4px 20px rgba(255, 77, 79, 0.3);
+}
+
+/* 识别状态 */
+.circle-background.recognizing {
+    background: linear-gradient(180deg, #f6ffed 0%, #52c41a 100%);
+    transform: scale(1.05);
+    box-shadow: 0 4px 20px rgba(82, 196, 26, 0.3);
+}
+
+/* 思考状态 */
+.circle-background.thinking {
+    background: linear-gradient(180deg, #fff7e6 0%, #faad14 100%);
+    transform: scale(1.05);
+    box-shadow: 0 4px 20px rgba(250, 173, 20, 0.3);
 }
 
 .circle-background::before {
@@ -119,26 +141,142 @@ button:disabled {
     cursor: not-allowed;
 }
 
-#startVoice {
-    background-color: #e6f7ff;
-    color: #1890ff;
+/* 语音状态全局指示器 */
+.voice-status {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 20px 30px;
+    border-radius: 12px;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
-#stopVoice {
-    background-color: #fff1f0;
-    color: #ff4d4f;
+.voice-status.show {
+    display: flex;
 }
 
-#sendBtn {
-    background-color: #1890ff;
+.voice-status-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: #ff4d4f;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: pulse 1.5s infinite;
+}
+
+.voice-status-icon i {
+    font-size: 24px;
     color: white;
 }
 
-/* 添加图标样式 */
-.icon {
+.voice-status-text {
+    font-size: 14px;
+    text-align: center;
+}
+
+/* 修改语音按钮状态样式 */
+#startVoice {
+    background-color: #e6f7ff;
+    color: #1890ff;
+    position: relative;
+    transition: all 0.3s ease;
+}
+
+#startVoice.recording {
+    background-color: #ff4d4f;
+    color: white;
+    animation: pulseRecord 1.5s infinite;
+}
+
+/* 移除原来的recording-indicator */
+.recording-indicator {
+    display: none;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.4);
+    }
+    70% {
+        transform: scale(1.05);
+        box-shadow: 0 0 0 10px rgba(255, 77, 79, 0);
+    }
+    100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 77, 79, 0);
+    }
+}
+
+/* 波形动画优化 */
+.voice-wave {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.recording .voice-wave::before,
+.recording .voice-wave::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border: 2px solid rgba(255, 255, 255, 0.8);
+    border-radius: 50%;
+    animation: voiceWave 1.5s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.recording .voice-wave::after {
+    animation-delay: 0.5s;
+}
+
+/* 加载状态指示器 */
+.loading-indicator {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 15px 20px;
+    border-radius: 8px;
+    display: none;
+    align-items: center;
+    gap: 10px;
+    z-index: 1000;
+}
+
+.loading-indicator.show {
+    display: flex;
+}
+
+.loading-spinner {
     width: 20px;
     height: 20px;
-    fill: currentColor;
+    border: 2px solid #fff;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
 
 /* 显示聊天容器 */
@@ -198,32 +336,25 @@ button:disabled {
     border-radius: 50%;
     background: rgba(255, 255, 255, 0.2);
     position: relative;
-    animation: pulse 2s infinite;
+    transition: transform 0.3s ease, background-color 0.3s ease;
 }
 
-@keyframes pulse {
-    0% {
-        transform: scale(0.95);
-        box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.3);
-    }
-    
-    70% {
-        transform: scale(1);
-        box-shadow: 0 0 0 30px rgba(255, 255, 255, 0);
-    }
-    
-    100% {
-        transform: scale(0.95);
-        box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
-    }
-}
-
-/* 添加录音时的动画效果 */
+/* 录音状态波浪 */
 .recording .wave-animation {
-    animation: recording 1s infinite;
+    animation: recordingWave 1.5s infinite;
 }
 
-@keyframes recording {
+/* 识别状态波浪 */
+.recognizing .wave-animation {
+    animation: processingWave 2s infinite;
+}
+
+/* 思考状态波浪 */
+.thinking .wave-animation {
+    animation: thinkingWave 3s infinite;
+}
+
+@keyframes recordingWave {
     0% {
         transform: scale(0.95);
         background: rgba(255, 255, 255, 0.1);
@@ -234,6 +365,36 @@ button:disabled {
     }
     100% {
         transform: scale(0.95);
+        background: rgba(255, 255, 255, 0.1);
+    }
+}
+
+@keyframes processingWave {
+    0% {
+        transform: scale(1);
+        background: rgba(255, 255, 255, 0.1);
+    }
+    50% {
+        transform: scale(1.1);
+        background: rgba(255, 255, 255, 0.3);
+    }
+    100% {
+        transform: scale(1);
+        background: rgba(255, 255, 255, 0.1);
+    }
+}
+
+@keyframes thinkingWave {
+    0% {
+        transform: scale(1) rotate(0deg);
+        background: rgba(255, 255, 255, 0.1);
+    }
+    50% {
+        transform: scale(1.05) rotate(180deg);
+        background: rgba(255, 255, 255, 0.3);
+    }
+    100% {
+        transform: scale(1) rotate(360deg);
         background: rgba(255, 255, 255, 0.1);
     }
 }
@@ -399,4 +560,20 @@ textarea:focus {
     font-size: 12px;
     color: #0066cc;
     text-decoration: none;
+}
+
+/* 圆形背景状态过渡 */
+.circle-background {
+    transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.circle-background.recording,
+.circle-background.recognizing,
+.circle-background.thinking {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 波浪动画过渡 */
+.wave-animation {
+    transition: transform 0.3s ease, background-color 0.3s ease;
 } 

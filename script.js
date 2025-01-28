@@ -32,6 +32,9 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     function startVoiceRecognition() {
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            const startVoiceBtn = document.getElementById('startVoice');
+            const circleBackground = document.querySelector('.circle-background');
+            
             navigator.mediaDevices.getUserMedia({ 
                 audio: {
                     channelCount: 1,
@@ -42,9 +45,7 @@ document.addEventListener('DOMContentLoaded', async function() {
             })
             .then(stream => {
                 try {
-                    // 使用最基础的音频格式
                     mediaRecorder = new MediaRecorder(stream);
-                    
                     audioChunks = [];
                     
                     mediaRecorder.ondataavailable = (event) => {
@@ -53,59 +54,53 @@ document.addEventListener('DOMContentLoaded', async function() {
                         }
                     };
 
-                    mediaRecorder.onerror = (event) => {
-                        console.error('录音错误:', event.error);
-                        stopVoiceRecognition();
-                    };
-
                     mediaRecorder.onstart = () => {
-                        startVoiceBtn.style.backgroundColor = '#ff4d4f';
-                        startVoiceBtn.style.color = 'white';
-                        document.querySelector('.circle-background').classList.add('recording');
+                        startVoiceBtn.classList.add('recording');
+                        circleBackground.className = 'circle-background recording';
                     };
 
                     mediaRecorder.onstop = async () => {
                         try {
-                            console.log('录音停止，开始处理音频数据...');
-                            // 直接使用录制的音频数据
+                            startVoiceBtn.classList.remove('recording');
+                            
+                            // 切换到识别状态
+                            circleBackground.className = 'circle-background recognizing';
+                            
                             const audioBlob = new Blob(audioChunks);
-                            console.log('录音数据块数量:', audioChunks.length);
-                            console.log('合并后的音频大小:', audioBlob.size, 'bytes');
-                            
-                            // 发送到语音识别API
                             const transcribedText = await speechToText(audioBlob);
-                            console.log('识别到的文本:', transcribedText);
-                            textInput.value = transcribedText;
-                            await sendMessage();
                             
-                            startVoiceBtn.style.backgroundColor = '';
-                            startVoiceBtn.style.color = '';
-                            document.querySelector('.circle-background').classList.remove('recording');
+                            if (transcribedText) {
+                                textInput.value = transcribedText;
+                                
+                                // 切换到思考状态
+                                circleBackground.className = 'circle-background thinking';
+                                
+                                await sendMessage();
+                                
+                                // 恢复正常状态
+                                circleBackground.className = 'circle-background';
+                            }
                         } catch (error) {
-                            console.error('语音处理完整错误:', {
-                                name: error.name,
-                                message: error.message,
-                                stack: error.stack,
-                                cause: error.cause
-                            });
-                            startVoiceBtn.style.backgroundColor = '';
-                            startVoiceBtn.style.color = '';
-                            document.querySelector('.circle-background').classList.remove('recording');
+                            console.error('语音处理错误:', error);
+                            addMessage('抱歉，语音识别失败，请重试。', false);
+                            circleBackground.className = 'circle-background';
                         }
                     };
                     
                     mediaRecorder.start(100);
                 } catch (error) {
                     console.error('初始化录音失败:', error);
-                    throw error;
+                    addMessage('无法启动录音，请检查麦克风权限。', false);
+                    circleBackground.className = 'circle-background';
                 }
             })
             .catch(error => {
                 console.error('获取麦克风失败:', error);
-                console.error(`${error.name}: ${error.message}`);
+                addMessage('无法访问麦克风，请检查权限设置。', false);
+                circleBackground.className = 'circle-background';
             });
         } else {
-            console.error('您的浏览器不支持语音识别功能');
+            addMessage('您的浏览器不支持语音识别功能。', false);
         }
     }
 
@@ -187,23 +182,36 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     // 4. 初始化按钮事件
     function initializeVoiceButton() {
-        const handleMouseDown = (e) => {
-            e.preventDefault();
-            startVoiceRecognition();
-        };
+        const startVoiceBtn = document.getElementById('startVoice');
+        let isRecording = false;
 
-        const handleStop = () => {
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                stopVoiceRecognition();
+        const startRecording = (e) => {
+            e.preventDefault();
+            if (!isRecording) {
+                isRecording = true;
+            startVoiceRecognition();
             }
         };
 
-        startVoiceBtn.addEventListener('mousedown', handleMouseDown);
-        startVoiceBtn.addEventListener('mouseup', handleStop);
-        startVoiceBtn.addEventListener('mouseleave', handleStop);
-        startVoiceBtn.addEventListener('touchstart', handleMouseDown);
-        startVoiceBtn.addEventListener('touchend', handleStop);
-        startVoiceBtn.addEventListener('touchcancel', handleStop);
+        const stopRecording = () => {
+            if (isRecording) {
+                isRecording = false;
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    mediaRecorder.stop();
+                    mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                }
+            }
+        };
+
+        // 移动端事件
+        startVoiceBtn.addEventListener('touchstart', startRecording);
+        startVoiceBtn.addEventListener('touchend', stopRecording);
+        startVoiceBtn.addEventListener('touchcancel', stopRecording);
+
+        // 桌面端事件
+        startVoiceBtn.addEventListener('mousedown', startRecording);
+        startVoiceBtn.addEventListener('mouseup', stopRecording);
+        startVoiceBtn.addEventListener('mouseleave', stopRecording);
     }
 
     // 5. 初始化和事件监听
@@ -313,7 +321,101 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
     }
 
-    // 添加发送消息函数
+    // 修改预加载音频的函数
+    async function preloadAudio(text) {
+        // 分割句子
+        const sentences = text.match(/[^。！？.!?]+[。！？.!?]+/g) || [text];
+        const audioResults = [];
+        
+        // 顺序加载音频
+        for (const sentence of sentences) {
+            try {
+                const encodedText = encodeURIComponent(sentence);
+                const url = `https://xiaoapi.cn/API/zs_tts.php?type=xunfei&msg=${encodedText}&id=3`;
+                
+                // 发起请求并等待完成
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.code === 200) {
+                    // 创建并预加载音频
+                    const audio = new Audio();
+                    audio.src = data.tts.replace('http://', 'https://');
+                    
+                    // 等待音频加载完成
+                    await new Promise((resolve, reject) => {
+                        audio.onloadeddata = resolve;
+                        audio.onerror = reject;
+                    });
+                    
+                    audioResults.push({
+                        sentence,
+                        audioUrl: audio.src,
+                        audio: audio,
+                        loaded: true
+                    });
+                } else {
+                    console.error('音频合成失败:', data);
+                    audioResults.push({
+                        sentence,
+                        loaded: false,
+                        error: '音频合成失败'
+                    });
+                }
+            } catch (error) {
+                console.error('音频预加载失败:', error);
+                audioResults.push({
+                    sentence,
+                    loaded: false,
+                    error: error.message
+                });
+            }
+        }
+        
+        return audioResults;
+    }
+
+    // 修改发送消息函数中的音频播放部分
+    async function playAudioSequentially(audioData, messageDiv) {
+        const waveform = messageDiv.querySelector('.waveform');
+        
+        try {
+            if (audioData && audioData.loaded && audioData.audio) {
+                await new Promise((resolve, reject) => {
+                    const audio = audioData.audio;
+                    
+                    audio.onplay = () => {
+                        startWaveformAnimation(waveform);
+                    };
+                    
+                    audio.onended = () => {
+                        stopWaveformAnimation(waveform);
+                        resolve();
+                    };
+                    
+                    audio.onerror = (e) => {
+                        console.error('音频播放错误:', e);
+                        stopWaveformAnimation(waveform);
+                        reject(new Error('音频播放失败'));
+                    };
+                    
+                    // 确保音频从头开始播放
+                    audio.currentTime = 0;
+                    audio.play().catch(error => {
+                        console.error('音频播放失败:', error);
+                        stopWaveformAnimation(waveform);
+                        reject(error);
+                    });
+                });
+            } else {
+                console.warn('音频未加载成功，跳过播放');
+            }
+        } catch (error) {
+            console.error('音频播放错误:', error);
+        }
+    }
+
+    // 修改发送消息函数中的处理部分
     async function sendMessage() {
         const text = textInput.value.trim();
         if (text) {
@@ -321,56 +423,40 @@ document.addEventListener('DOMContentLoaded', async function() {
             textInput.value = '';
             
             try {
-                // 显示思考状态
                 const thinkingMessage = addMessage('', false, true);
-                
-                // 判断是否需要搜索
                 const shouldSearch = await checkIfNeedSearch(text);
-                
-                // 移除思考状态
                 chatContainer.removeChild(thinkingMessage);
                 
-                if (shouldSearch) {
-                    // 显示搜索结果区域并执行搜索
-                    searchResults.style.display = 'block';
-                    const searchResultsData = await searchAPI.search(text);
-                    displaySearchResults(searchResultsData);
-                    
-                    // 添加提示消息
-                    addMessage('已为您找到相关新闻报道，请查看左侧搜索结果。', false);
-                } else {
-                    // 隐藏搜索结果区域
-                    searchResults.style.display = 'none';
-                    
-                    // 显示新的思考状态
+                if (!shouldSearch) {
                     const aiThinkingMessage = addMessage('', false, true);
-                    
-                    // 继续处理AI对话
                     const aiResponse = await callSiliconFlowAPI(text);
                     chatContainer.removeChild(aiThinkingMessage);
                     
-                    // 处理AI响应
+                    // 分割句子并预加载音频
                     const sentences = aiResponse.match(/[^。！？.!?]+[。！？.!?]+/g) || [aiResponse];
-                    for (const sentence of sentences) {
-                        try {
-                            // 创建新的消息元素
+                    const audioData = await preloadAudio(aiResponse);
+                    
+                    // 显示消息并按顺序播放音频
+                    for (let i = 0; i < sentences.length; i++) {
+                        const sentence = sentences[i];
+                        const audioInfo = audioData[i];
+                        
+                        // 创建消息元素
                             const messageDiv = document.createElement('div');
                             messageDiv.className = 'message ai-message';
                             messageDiv.style.opacity = '0';
-
-                            // 添加波形容器
-                            const waveformContainer = document.createElement('div');
-                            waveformContainer.className = 'waveform-container';
 
                             // 添加文本容器
                             const textContainer = document.createElement('div');
                             textContainer.className = 'text-container';
                             textContainer.textContent = sentence;
 
-                            // 添加波形元素
+                        // 添加波形容器
+                        const waveformContainer = document.createElement('div');
+                        waveformContainer.className = 'waveform-container';
                             const waveform = document.createElement('div');
                             waveform.className = 'waveform';
-                            for (let i = 0; i < 30; i++) {
+                        for (let j = 0; j < 30; j++) {
                                 const bar = document.createElement('div');
                                 bar.className = 'waveform-bar';
                                 waveform.appendChild(bar);
@@ -386,119 +472,8 @@ document.addEventListener('DOMContentLoaded', async function() {
                             chatContainer.appendChild(messageDiv);
                             chatContainer.scrollTop = chatContainer.scrollHeight;
 
-                            // 尝试获取并播放语音
-                            let audioUrl = null;
-                            let retryCount = 0;
-                            const maxRetries = 3;
-
-                            while (retryCount < maxRetries && !audioUrl) {
-                                try {
-                                    console.log(`开始语音合成请求... (尝试 ${retryCount + 1}/${maxRetries})`);
-                                    const encodedText = encodeURIComponent(sentence);
-                                    const url = `https://xiaoapi.cn/API/zs_tts.php?type=xunfei&msg=${encodedText}&id=3`;
-                                    
-                                    console.log('请求URL:', url);
-                                    const response = await fetch(url);
-                                    
-                                    console.log('语音合成响应状态:', response.status);
-                                    if (![200, 206, 307].includes(response.status)) {
-                                        throw new Error(`TTS API状态码异常: ${response.status}`);
-                                    }
-
-                                    const responseText = await response.text();
-                                    console.log('原始响应内容:', responseText);
-
-                                    let data;
-                                    try {
-                                        data = JSON.parse(responseText);
-                                    } catch (e) {
-                                        console.error('解析响应JSON失败:', e);
-                                        throw new Error(`解析响应失败: ${e.message}`);
-                                    }
-
-                                    console.log('语音合成响应数据:', data);
-                                    
-                                    if (data.code !== 200) {
-                                        throw new Error(`语音合成失败: ${data.msg || '未知错误'}`);
-                                    }
-
-                                    // 直接使用返回的音频URL
-                                    audioUrl = data.tts.replace('http://', 'https://');
-                                    console.log('获取到音频URL:', audioUrl);
-                                    break;
-                                    
-                                } catch (error) {
-                                    console.error('语音合成错误:', {
-                                        attempt: retryCount + 1,
-                                        error: {
-                                            name: error.name,
-                                            message: error.message,
-                                            stack: error.stack
-                                        }
-                                    });
-                                    
-                                    retryCount++;
-                                    if (retryCount < maxRetries) {
-                                        console.log(`准备第 ${retryCount + 1} 次重试...`);
-                                        await new Promise(resolve => setTimeout(resolve, 1000));
-                                    } else {
-                                        console.error('语音合成达到最大重试次数');
-                                        throw error;
-                                    }
-                                }
-                            }
-
-                            if (audioUrl) {
-                                try {
-                                    console.log('开始播放音频...');
-                                    const audio = new Audio(audioUrl);
-                                    const waveform = messageDiv.querySelector('.waveform');
-                                    
-                                    await new Promise((resolve, reject) => {
-                                        audio.onplay = () => {
-                                            startWaveformAnimation(waveform);
-                                        };
-                                        
-                                        audio.onended = () => {
-                                            console.log('音频播放完成');
-                                            stopWaveformAnimation(waveform);
-                                            resolve();
-                                        };
-                                        
-                                        audio.onerror = (e) => {
-                                            console.error('音频播放错误:', e);
-                                            stopWaveformAnimation(waveform);
-                                            reject(new Error('音频播放失败'));
-                                        };
-                                        
-                                        audio.play().catch(error => {
-                                            console.error('音频播放失败:', error);
-                                            stopWaveformAnimation(waveform);
-                                            reject(error);
-                                        });
-                                    });
-                                } catch (error) {
-                                    console.error('音频播放完整错误:', {
-                                        name: error.name,
-                                        message: error.message,
-                                        stack: error.stack
-                                    });
-                                    throw error;
-                                }
-                            } else {
-                                console.error('未能获取有效的音频URL');
-                            }
-                            
-                        } catch (error) {
-                            console.error('句子处理完整错误:', {
-                                sentence,
-                                error: {
-                                    name: error.name,
-                                    message: error.message,
-                                    stack: error.stack
-                                }
-                            });
-                        }
+                        // 等待当前音频播放完成后再播放下一个
+                        await playAudioSequentially(audioInfo, messageDiv);
                     }
                 }
             } catch (error) {
